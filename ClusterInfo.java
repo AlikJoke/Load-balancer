@@ -1,20 +1,9 @@
-package ru.project.balancer.cluster.impl;
+package ru.bpc.cm.servlet.cluster.balancing;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Enumeration;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Optional;
-import java.util.Spliterator;
-import java.util.Spliterators;
 import java.util.concurrent.ConcurrentMap;
-import java.util.function.Consumer;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
 import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
@@ -22,62 +11,101 @@ import javax.servlet.http.HttpServletRequest;
 
 import org.springframework.util.StringUtils;
 
+import jersey.repackaged.com.google.common.base.Function;
+import jersey.repackaged.com.google.common.base.Predicate;
+import jersey.repackaged.com.google.common.collect.Lists;
+import jersey.repackaged.com.google.common.collect.Maps;
+import ru.bpc.cm.servlet.cluster.properties.ClusterPropertiesFields;
+import ru.bpc.cm.servlet.cluster.properties.PropertyHolder;
+import ru.bpc.cm.servlet.cluster.properties.PropertyHolderImpl;
 
 public class ClusterInfo implements IClusterInfo {
+
+	private PropertyHolder props;
 
 	private static ConcurrentMap<Integer, ClusterNode> nodes;
 
 	private static List<String> requests;
 
-	private static ClusterInfo info;
-
 	static {
 		requests = Lists.newArrayList();
-		info = new ClusterInfo();
+	}
+
+	private static ClusterInfo instance;
+
+	private ClusterInfo() {
+		this.props = new PropertyHolderImpl();
+		this.initContext();
 	}
 
 	public static ClusterInfo getClusterInfo() {
-		return info;
+		if (instance == null)
+			instance = new ClusterInfo();
+		return instance;
 	}
+
+	private final Function<List<String>, String> fromListToString = new Function<List<String>, String>() {
+		@Override
+		public String apply(final List<String> input) {
+			StringBuilder sb = new StringBuilder();
+			for (String param : input)
+				sb.append(";").append(param);
+			return sb.toString();
+		}
+	};
 
 	private boolean addRequest(final HttpServletRequest request) {
 		@SuppressWarnings("unchecked")
-		List<String> paramNames = (List<String>) enumerationAsStream(request.getParameterNames())
-				.filter(param -> param != null).map(param -> param + ":" + request.getParameterValues(param.toString()))
-				.collect(Collectors.toList());
+		List<String> paramNames = Lists.transform(Collections.list(request.getParameterNames()),
+				new Function<String, String>() {
+
+					@Override
+					public String apply(final String input) {
+						return input + ":" + request.getParameterValues(input);
+					}
+
+				});
 		String key = request.getRemoteUser() + request.getRequestURL() + request.getContentType()
-				+ request.getRemoteAddr() + request.getRequestedSessionId()
-				+ StringUtils.collectionToDelimitedString(paramNames, ";");
+				+ request.getRemoteAddr() + request.getRequestedSessionId() + fromListToString.apply(paramNames);
+		boolean isContains = !requests.contains(key) ? requests.add(key) : false;
 		try {
-			return !requests.contains(key) ? requests.add(key) : false;
+			return isContains;
 		} finally {
-			if (requests.contains(key))
+			if (!isContains)
 				requests.remove(key);
 		}
 	}
 
-	private static <T> Stream<T> enumerationAsStream(final Enumeration<T> e) {
-		return StreamSupport.stream(Spliterators.spliteratorUnknownSize(new Iterator<T>() {
-			public T next() {
-				return e.nextElement();
-			}
+	private void initContext() {
+		String cnt = props.getProperty(ClusterPropertiesFields.COUNT);
+		if (!StringUtils.hasLength(cnt))
+			return;
 
-			public boolean hasNext() {
-				return e.hasMoreElements();
-			}
+		int count = Integer.parseInt(cnt);
+		for (int i = 1; i < count + 1; i++) {
+			String hostName = props.getProperty(ClusterPropertiesFields.HOST + i);
+			String address = props.getProperty(ClusterPropertiesFields.ADDRESS + i);
+			int port = Integer.parseInt(props.getProperty(ClusterPropertiesFields.PORT + i));
+			this.initialize(hostName, address, port);
+		}
 
-			public void forEachRemaining(Consumer<? super T> action) {
-				while (e.hasMoreElements())
-					action.accept(e.nextElement());
-			}
-		}, Spliterator.ORDERED), false);
+	}
+
+	private ClusterNode initialize(String hostName, String address, int port) {
+		int hash = port + hostName.hashCode();
+		ClusterNode node = this.nodes().get(hash);
+		if (node == null)
+			node = new ClusterNode(hostName, address, port);
+		this.nodes().putIfAbsent(hash, node);
+		return node;
 	}
 
 	@Override
 	public ClusterNode initialize(ServletRequest request, ServletResponse response) {
 		int hash = request.getServerPort() + request.getServerName().hashCode();
-		ClusterNode node = Optional.<ClusterNode>fromNullable(this.nodes().get(hash))
-				.or(new ClusterNode(request.getLocalName(), request.getServerName(), request.getServerPort()));
+		ClusterNode node = this.nodes().get(hash);
+		if (node == null)
+			node = new ClusterNode(request.getLocalName(), request.getServerName(), request.getServerPort());
 		node.plus();
 		this.nodes().putIfAbsent(hash, node);
 		return node;
@@ -100,8 +128,14 @@ public class ClusterInfo implements IClusterInfo {
 		if (this.getNumberNodes() < 2 || !addRequest(request))
 			return false;
 		final long count = node.getRequestCounter();
-		return this.nodes().entrySet().stream().filter(node -> node.getValue().getRequestCounter() < count)
-				.collect(Collectors.toList()).size() > 0;
+		if (Maps.filterValues(this.nodes(), new Predicate<ClusterNode>() {
+			@Override
+			public boolean apply(ClusterNode node) {
+				return node.getRequestCounter() + 1 < count;
+			}
+		}).size() > 0)
+			return true;
+		return false;
 	}
 
 	public static String computeURL(ClusterNode node, ServletRequest request) {

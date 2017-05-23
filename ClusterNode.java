@@ -1,4 +1,4 @@
-package ru.project.balancer.cluster.node;
+package ru.bpc.cm.servlet.cluster.balancing;
 
 import java.io.IOException;
 
@@ -8,6 +8,8 @@ import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+
+import ru.bpc.cm.servlet.cluster.wrapper.RequestAttributesHolder;
 
 public class ClusterNode {
 
@@ -72,10 +74,10 @@ public class ClusterNode {
 
 	public void doRedirect(ServletRequest request, ServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
-		if (ClusterInfo.getClusteInfo().needRedirect(this, (HttpServletRequest) request)) {
+		if (ClusterInfo.getClusterInfo().needRedirect(this, (HttpServletRequest) request)) {
+			RequestAttributesHolder.holdRequest((HttpServletRequest) request);
 			((HttpServletResponse) response).sendRedirect(ClusterInfo.computeURL(this, request));
-		} else {
+		} else
 			chain.doFilter(request, response);
-		}
 	}
 }

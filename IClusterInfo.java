@@ -1,4 +1,4 @@
-package ru.project.balancer.cluster;
+package ru.bpc.cm.servlet.cluster.balancing;
 
 import java.util.concurrent.ConcurrentMap;
 
@@ -12,7 +12,6 @@ import javax.servlet.http.HttpServletRequest;
  * 
  * @author Alimurad A. Ramazanov
  * @since 03.12.2016
- * @version 1.0.1
  */
 public interface IClusterInfo {
 
