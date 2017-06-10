@@ -17,6 +17,7 @@ public class ClusterNode {
 	private String hostName;
 	private String address;
 	private long requested;
+	private double coeff;
 
 	public static ClusterNode getNode() {
 		return new ClusterNode();
@@ -27,13 +28,15 @@ public class ClusterNode {
 		this.hostName = "localhost";
 		this.address = "127.0.0.1";
 		this.requested = 0;
+		this.coeff = 1;
 	}
 
-	public ClusterNode(String hostName, String address, int port) {
+	public ClusterNode(String hostName, String address, int port, double coeff) {
 		this.port = port;
 		this.hostName = hostName;
 		this.address = address;
 		this.requested = 0;
+		this.coeff = coeff;
 	}
 
 	public void setPort(int port) {
@@ -58,6 +61,10 @@ public class ClusterNode {
 
 	public String getAddress() {
 		return this.address;
+	}
+	
+	public double getCoeff() {
+		return this.coeff;
 	}
 
 	public void plus() {

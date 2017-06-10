@@ -1,5 +1,7 @@
 package ru.bpc.cm.servlet.cluster.balancing;
 
+import java.io.IOException;
+import java.net.URL;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -83,19 +85,20 @@ public class ClusterInfo implements IClusterInfo {
 
 		int count = Integer.parseInt(cnt);
 		for (int i = 1; i < count + 1; i++) {
-			String hostName = props.getProperty(ClusterPropertiesFields.HOST + i);
-			String address = props.getProperty(ClusterPropertiesFields.ADDRESS + i);
-			int port = Integer.parseInt(props.getProperty(ClusterPropertiesFields.PORT + i));
-			this.initialize(hostName, address, port);
+			final String hostName = props.getProperty(ClusterPropertiesFields.HOST + i);
+			final String address = props.getProperty(ClusterPropertiesFields.ADDRESS + i);
+			final int port = Integer.parseInt(props.getProperty(ClusterPropertiesFields.PORT + i));
+			final double coeff = Double.parseDouble(props.getProperty(ClusterPropertiesFields.COEFF + i));
+			this.initialize(hostName, address, port, coeff);
 		}
 
 	}
 
-	private ClusterNode initialize(String hostName, String address, int port) {
+	private ClusterNode initialize(String hostName, String address, int port, double coeff) {
 		int hash = port + hostName.hashCode();
 		ClusterNode node = this.nodes().get(hash);
 		if (node == null)
-			node = new ClusterNode(hostName, address, port);
+			node = new ClusterNode(hostName, address, port, coeff);
 		this.nodes().putIfAbsent(hash, node);
 		return node;
 	}
@@ -105,7 +108,7 @@ public class ClusterInfo implements IClusterInfo {
 		int hash = request.getServerPort() + request.getServerName().hashCode();
 		ClusterNode node = this.nodes().get(hash);
 		if (node == null)
-			node = new ClusterNode(request.getLocalName(), request.getServerName(), request.getServerPort());
+			node = new ClusterNode(request.getLocalName(), request.getServerName(), request.getServerPort(), 1);
 		node.plus();
 		this.nodes().putIfAbsent(hash, node);
 		return node;
@@ -127,11 +130,11 @@ public class ClusterInfo implements IClusterInfo {
 	public boolean needRedirect(ClusterNode node, HttpServletRequest request) {
 		if (this.getNumberNodes() < 2 || !addRequest(request))
 			return false;
-		final long count = node.getRequestCounter();
+		final double count = node.getRequestCounter() * node.getCoeff();
 		if (Maps.filterValues(this.nodes(), new Predicate<ClusterNode>() {
 			@Override
 			public boolean apply(ClusterNode node) {
-				return node.getRequestCounter() + 1 < count;
+				return (node.getRequestCounter() + 1) * node.getCoeff() < count;
 			}
 		}).size() > 0)
 			return true;
@@ -141,29 +144,47 @@ public class ClusterInfo implements IClusterInfo {
 	public static String computeURL(ClusterNode node, ServletRequest request) {
 		if (node == null)
 			throw new RuntimeException("Node can't be null");
-		List<ClusterNode> sortedNodes = Lists.newArrayList(nodes.values());
-		Collections.sort(sortedNodes, new Comparator<ClusterNode>() {
+		
+		while (true) {
+			List<ClusterNode> sortedNodes = Lists.newArrayList(getClusterInfo().nodes().values());
+			Collections.sort(sortedNodes, new Comparator<ClusterNode>() {
 
-			@Override
-			public int compare(ClusterNode arg0, ClusterNode arg1) {
-				if (arg0.getRequestCounter() == arg1.getRequestCounter())
-					return 0;
-				else if (arg0.getRequestCounter() < arg1.getRequestCounter())
-					return -1;
-				else
-					return 1;
+				@Override
+				public int compare(ClusterNode arg0, ClusterNode arg1) {
+					if (arg0.getRequestCounter() * arg0.getCoeff() == arg1.getRequestCounter() * arg1.getCoeff())
+						return 0;
+					else if (arg0.getRequestCounter() * arg0.getCoeff() < arg1.getRequestCounter() * arg1.getCoeff())
+						return -1;
+					else
+						return 1;
+				}
+			});
+
+			StringBuilder sb = new StringBuilder();
+			String requestURL = ((HttpServletRequest) request).getRequestURL().toString();
+			String requestURI = ((HttpServletRequest) request).getRequestURI();
+
+			sb.append(requestURL.substring(0, requestURL.indexOf("//") + 2));
+			sb.append(sortedNodes.get(0).getAddress());
+			sb.append(":");
+			sb.append(sortedNodes.get(0).getPort());
+			if (!isAlive(sb.toString())) {
+				getClusterInfo().nodes().remove(node.getPort() + node.getHostName().hashCode());
+				continue;
 			}
-		});
+			sb.append(requestURI);
+			return sb.toString();
+		}
+	}
 
-		StringBuilder sb = new StringBuilder();
-		String requestURL = ((HttpServletRequest) request).getRequestURL().toString();
-		String requestURI = ((HttpServletRequest) request).getRequestURI();
-
-		sb.append(requestURL.substring(0, requestURL.indexOf("//") + 2));
-		sb.append(sortedNodes.get(0).getAddress());
-		sb.append(":");
-		sb.append(sortedNodes.get(0).getPort());
-		sb.append(requestURI);
-		return sb.toString();
+	private static boolean isAlive(String serverAddr) {
+		try {
+			URL url = new URL(serverAddr + "/SVCM");
+			url.openConnection();
+			return true;
+		} catch (IOException e) {
+			// ignore, server is dead
+		}
+		return false;
 	}
 }
